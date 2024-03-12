@@ -11,12 +11,17 @@ from streamlit_folium import st_folium
 from folium.plugins import MarkerCluster
 from streamlit_folium import folium_static
 from math import radians, cos, sin, asin, sqrt
+import seaborn as sns
+
 
 plt.rcParams['font.family'] = 'Malgun Gothic'
 openai_client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 metro = pd.read_csv("./data/metro_station_final.csv")
 df = pd.read_csv("./data/total_score_final.csv")
 center_df = pd.read_csv("./data/seoul_town_name_ceneter_point.csv")
+rent_price_df = pd.read_csv("./data/rent_price_전세.csv")
+
+
 # 권역별 자치구 분류
 seoul_region = {
     "도심권(중구,종로,용산)": ["중구", "종로구","용산구"],
@@ -82,17 +87,17 @@ def draw_radar_chart(items, index=0):
     scores = np.concatenate((scores,[scores[0]]))  
     angles += angles[:1]  
 
-    fig, ax = plt.subplots(figsize=(5, 5), subplot_kw=dict(polar=True))
+    fig, ax = plt.subplots(figsize=(6, 4), subplot_kw=dict(polar=True))
     ax.fill(angles, scores, color='red', alpha=0.25)
     ax.plot(angles, scores, color='red', linewidth=3)
 
     ax.set_xticks([])
 
     for angle, score in zip(angles[:-1], scores[:-1]):
-        ax.text(angle, score + 5, str(score), horizontalalignment='center', verticalalignment='center', fontsize=20, color='black')
+        ax.text(angle, score + 4, str(score), horizontalalignment='center', verticalalignment='center', fontsize=20, color='black')
     for angle, label in zip(angles[:-1], labels):
-        ax.text(angle, 20, label, horizontalalignment='center', verticalalignment='center', fontsize=20, color='blue')
-    plt.text(0.5, -0.5, index_name, size=14, ha='center', transform=fig.transFigure)
+        ax.text(angle, 17, label, horizontalalignment='center', verticalalignment='center', fontsize=20, color='blue')
+    plt.text(0.5, -0.0, index_name, size=20, ha='center', transform=fig.transFigure)
     return fig  
   
 def create_map(center_df, selected_town_name):
@@ -119,6 +124,27 @@ def haversine(lon1, lat1, lon2, lat2):
     r = 6371  
     return c * r
 
+def plot_rent_info(town_name, df):
+    sns.set(style="whitegrid", palette="pastel")  # 스타일 설정
+    plt.rcParams['font.family'] = 'Malgun Gothic'
+    
+    filtered_data = rent_price_df[rent_price_df['town_name'] == town_name]
+    fig, ax = plt.subplots(figsize=(5, 4))
+    sns.barplot(data=filtered_data, x='건물용도', y='평당평균보증금', ax=ax, ci=None)
+    ax.set_title(f'{town_name} 전세 정보', fontsize=18, fontweight='bold')
+    ax.set_ylabel('평당 평균 보증금 (단위: 만원)', fontsize=14)
+    ax.set_xlabel('건물용도', fontsize=14)
+    plt.xticks(rotation=45)
+
+    for p in ax.patches:
+        ax.annotate(f'{p.get_height():.0f}', 
+                    (p.get_x() + p.get_width() / 2., p.get_height()), 
+                    ha='center', va='center', 
+                    xytext=(0, 10),  # 텍스트 위치 조정
+                    textcoords='offset points',
+                    fontsize=12)
+    
+    return fig 
 
 st.markdown(
     """
@@ -233,14 +259,15 @@ def generate_prompt(items):
       교통성: {items.iloc[j][2]}
       생활 치안: {items.iloc[j][3]}
       종합 점수: {items.iloc[j][4]}
-      """
       
+      """
+    #만약 추천할 동네가 상업밀집구역에 위치하면 다른 동네를 추천해주세요.  
     item_text = item_text.strip()
     prompt = f"""유저가 입력한 살기 좋은 동네의 각 지표의 선호도에 따른 추천 결과가 주어집니다.
     유저의 입력과 각 추천 결과 동네, 편의성, 문화여가성,교통성,생활 치안,종합 점수 등을 참고하여 추천 동네를 작성하세요.
-    만약 추천할 동네가 상업밀집구역에 위치하면 다른 동네를 추천해주세요 
-    추천동네가 없다면 가장 비슷한 구역의 동네를 추천하세요
+    추천동네가 없다면 가장 비슷한 구역의 동네를 추천하세요.
     그 동네에 대한 정보를 검색해서 구체적으로 작성하세요.
+    주변 대형마트와 백화점 정보에 대해서도 알려주세요.
     20~30대 사회초년생을 위해서 작성하세요.
     당신에 대한 소개를 먼저 하고, 친절한 말투로 작성해주세요.
     중간 중간 이모지를 적절히 사용해주세요.
@@ -256,19 +283,24 @@ def generate_prompt(items):
 from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = None 
-
 with st.form("form"):
     submitted = st.form_submit_button("제출")
     if submitted:
-        fig = draw_radar_chart(items, index=0)
-        st.pyplot(fig)
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            radar_fig = draw_radar_chart(items, index=0)
+            st.pyplot(radar_fig)
+        with col2:
+            rent_fig = plot_rent_info(items.index[0], rent_price_df)
+            st.pyplot(rent_fig)
 
+        # 추천사 및 지도 표시
         with st.spinner("판타가 추천사를 작성합니다..."):
             prompt = generate_prompt(items)
             response = requests_chat_completion(prompt)
             draw_streaming_response(response)
+
         selected_town_name = items.index[0]
         st.subheader("지도")
-        m = create_map(center_df, selected_town_name) 
+        m = create_map(center_df, selected_town_name)
         st_folium(m, width=700, height=500)
-
