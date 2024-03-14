@@ -12,15 +12,18 @@ from folium.plugins import MarkerCluster
 from streamlit_folium import folium_static
 from math import radians, cos, sin, asin, sqrt
 import seaborn as sns
+from PIL import Image
+import json 
 
-
+Image.MAX_IMAGE_PIXELS = None 
 plt.rcParams['font.family'] = 'Malgun Gothic'
 openai_client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 metro = pd.read_csv("./data/metro_station_final.csv")
 df = pd.read_csv("./data/total_score_final.csv")
 center_df = pd.read_csv("./data/seoul_town_name_ceneter_point.csv")
 rent_price_df = pd.read_csv("./data/rent_price_전세.csv")
-
+with open('./data/bjd_region_to_codinate.geojson', 'r') as f:
+    geojson_data = json.load(f)
 
 # 권역별 자치구 분류
 seoul_region = {
@@ -41,10 +44,10 @@ def create_summary_df(data_frame):
     summary_df['town_name'] = data_frame['town_name']
 
     # 각 카테고리별 점수 계산
-    summary_df['편의성'] = data_frame[['mall_score', 'mart_score', 'pharmacy_score', 'restaurant_score']].sum(axis=1)
-    summary_df['문화여가성'] = data_frame[['culture_score', 'library_score', 'cinema_score', 'park_score', 'walk_score']].sum(axis=1)
-    summary_df['교통성'] = data_frame[['bus_score', 'metro_score', 'scooter_score', 'bicycle_score']].sum(axis=1)
-    summary_df['생활 치안'] = data_frame[['cctv_score', 'light_score', 'police_score', 'crime_score']].sum(axis=1)
+    summary_df['편의성'] = data_frame[['mall_score', 'mart_score', 'pharmacy_score', 'restaurant_score']].sum(axis=1) /4 *10
+    summary_df['문화여가성'] = data_frame[['culture_score', 'library_score', 'cinema_score', 'park_score', 'walk_score']].sum(axis=1) /5 *10
+    summary_df['교통성'] = data_frame[['bus_score', 'metro_score', 'scooter_score', 'bicycle_score']].sum(axis=1) /4 *10
+    summary_df['생활 치안'] = data_frame[['cctv_score', 'light_score', 'police_score', 'crime_score']].sum(axis=1) /4 *10
 
 
     return summary_df
@@ -78,28 +81,30 @@ def draw_streaming_response(response):
       placeholder.markdown(message +  "▌")
   placeholder.markdown(message)
   
+
 def draw_radar_chart(items, index=0):
     index_name = items.index[index]
     labels = items.columns.values[:-1]
     scores = items.iloc[index].values[:-1].round(2)
-
     angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False).tolist()
-    scores = np.concatenate((scores,[scores[0]]))  
-    angles += angles[:1]  
-
-    fig, ax = plt.subplots(figsize=(6, 4), subplot_kw=dict(polar=True))
+    scores = np.concatenate((scores, [scores[0]]))
+    angles += angles[:1]
+    fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(polar=True))
     ax.fill(angles, scores, color='red', alpha=0.25)
-    ax.plot(angles, scores, color='red', linewidth=3)
-
-    ax.set_xticks([])
-
-    for angle, score in zip(angles[:-1], scores[:-1]):
-        ax.text(angle, score + 4, str(score), horizontalalignment='center', verticalalignment='center', fontsize=20, color='black')
+    ax.plot(angles, scores, color='red', linewidth=2) 
+    ax.set_xticklabels([]) 
+    label_padding = 1.5 
+    score_padding = 1.15  
     for angle, label in zip(angles[:-1], labels):
-        ax.text(angle, 17, label, horizontalalignment='center', verticalalignment='center', fontsize=20, color='blue')
-    plt.text(0.5, -0.0, index_name, size=20, ha='center', transform=fig.transFigure)
-    return fig  
-  
+        ax.text(angle, label_padding * max(scores), label, horizontalalignment='center', verticalalignment='center', fontsize=20, color='blue')
+    for angle, score in zip(angles[:-1], scores[:-1]):
+        ax.text(angle, score_padding * max(scores), str(score), horizontalalignment='center', verticalalignment='center', fontsize=18, color='black')
+    plt.text(0.5, 0.5, index_name, size=20, ha='center', va='center', transform=ax.transAxes)
+    ax.set_aspect('equal')
+    plt.show()
+    return fig
+
+
 def create_map(center_df, selected_town_name):
     selected_town_name = items.iloc[0].name
     town_center = center_df[center_df["emd_nm"] == selected_town_name]
@@ -130,7 +135,7 @@ def plot_rent_info(town_name, df):
     
     filtered_data = rent_price_df[rent_price_df['town_name'] == town_name]
     fig, ax = plt.subplots(figsize=(5, 4))
-    sns.barplot(data=filtered_data, x='건물용도', y='평당평균보증금', ax=ax, ci=None)
+    sns.barplot(data=filtered_data, x='건물용도', y='평당평균보증금', ax=ax, errorbar=None)
     ax.set_title(f'{town_name} 전세 정보', fontsize=18, fontweight='bold')
     ax.set_ylabel('평당 평균 보증금 (단위: 만원)', fontsize=14)
     ax.set_xlabel('건물용도', fontsize=14)
@@ -145,6 +150,41 @@ def plot_rent_info(town_name, df):
                     fontsize=12)
     
     return fig 
+
+def generate_prompt(items):
+    item_text=""
+    weights_text = ", ".join([f"{key}:{value:.2f}" for key, value in initial_weights.items()])
+    for j in range(len(items)):
+      item_text += f"""
+      추천 결과 {j+1}
+      동네: {items.iloc[j].name}
+      편의성: {items.iloc[j][0]}
+      문화여가성: {items.iloc[j][1]}
+      교통성: {items.iloc[j][2]}
+      생활 치안: {items.iloc[j][3]}
+      종합 점수: {items.iloc[j][4]}
+      
+      """
+    #만약 추천할 동네가 상업밀집구역에 위치하면 다른 동네를 추천해주세요.  
+    item_text = item_text.strip()
+    prompt = f"""유저가 입력한 살기 좋은 동네의 각 지표의 선호도에 따른 추천 결과가 주어집니다.
+    유저의 입력과 각 추천 결과 동네, 편의성, 문화여가성,교통성,생활 치안,종합 점수 등을 참고하여 추천 동네를 작성하세요.
+    추천동네가 없다면 가장 비슷한 구역의 동네를 추천하세요.
+    그 동네에 대한 정보를 검색해서 구체적으로 작성하세요.
+    주변 대형마트와 백화점,영화관 정보에 대해서도 알려주세요.
+    20~30대 사회초년생을 위해서 작성하세요.
+    당신에 대한 소개를 먼저 하고, 친절한 말투로 작성해주세요.
+    중간 중간 이모지를 적절히 사용해주세요.
+    선호도가 가장 높은 지표의 정보를 검색해서 알려주세요(예시: 문화여가성->주변 카페 추천)
+    사용자가 입력한 가중치 정보: {weights_text}
+
+  ---
+  유저 입력: 
+  {item_text}
+  ---
+  """.strip()
+    return prompt
+
 
 st.markdown(
     """
@@ -195,29 +235,39 @@ item_to_column = {
 initial_weights = {'교통성': 25, '문화여가성': 25, '편의성': 25, '생활 치안': 25}
 
 # Streamlit UI 구성
-st.title('사용자 조절 도구')
-selected_region = st.selectbox('권역을 선택하세요:', list(seoul_region.keys()))
-st.subheader("세부 항목 선택 및 가중치 조정")
+
+col1, col2 = st.columns([3, 1])
+with col2:
+    st.image("./images/image_logo.png")
+with col1:
+    st.title('🛠️사용자 조절 도구')
+selected_region = st.selectbox('원하시는 권역을 선택하세요:', list(seoul_region.keys()))
+
 # 각 지표별로 세부 항목 선택 및 가중치 조정
+col3, col4 = st.columns([1, 1])
 
-for category, items in detail_items.items():
-    selected_items = st.multiselect(f"선택하세요 ({category}):", options=items, key=f"{category}_items")
-    item_weights = {}
-    if selected_items:
-        for item in selected_items:
-            weight = st.slider(f"{item} 가중치:", 0, 100, 50,5, key=f"{item}_weight")
-            item_weights[item] = weight
 
-    # 세부 항목 가중치 업데이트
-    for item, weight in item_weights.items():
-        score_col = item_to_column[item]  # 한국어 항목을 영어 열 이름으로 매핑
-        if score_col in df.columns:
-            df[score_col] *= (weight / 100)
+with col3:
+    # 지표별 가중치 조정
+    st.subheader("지표별 가중치 조정")
+    for category in initial_weights.keys():
+        initial_weights[category] = st.slider(f"{category} 가중치:", 0, 100, initial_weights[category], 5, key=f"{category}_weight")
+with col4:
+    st.subheader("세부 항목 가중치 조정")
+    for category, items in detail_items.items():
+        selected_items = st.multiselect(f"선택하세요 ({category}):", options=items, key=f"{category}_items")
+        st.write("")
+        item_weights = {}
+        if selected_items:
+            for item in selected_items:
+                weight = st.slider(f"{item} 가중치:", 0, 100, 100,5, key=f"{item}_weight")
+                item_weights[item] = weight
 
-# 지표별 가중치 조정
-st.header("지표별 가중치 조정")
-for category in initial_weights.keys():
-    initial_weights[category] = st.slider(f"{category} 가중치:", 0, 100, initial_weights[category], 5, key=f"{category}_weight")
+        # 세부 항목 가중치 업데이트
+        for item, weight in item_weights.items():
+            score_col = item_to_column[item]  # 한국어 항목을 영어 열 이름으로 매핑
+            if score_col in df.columns:
+                df[score_col] *= (weight / 100)
 
 # 종합점수 계산 및 상위 동네 표시
 new_df = create_summary_df(df)
@@ -225,7 +275,7 @@ for category in initial_weights:
     new_df[category] *= initial_weights[category] / 100
 
 new_df["구"] = df["county_name"]
-new_df['종합점수'] = new_df[list(initial_weights.keys())].sum(axis=1)
+new_df['종합점수'] = new_df[list(initial_weights.keys())].sum(axis=1) / 4
 new_df.set_index('town_name', inplace=True)
 new_df = new_df.round(2)
 selected_gu = seoul_region[selected_region]
@@ -235,62 +285,26 @@ toggle = st.toggle(label="데이터 보기")
 
 if raw_df:
     st.write(df)
-
-
+    
 if toggle:
     st.write(filtered_df)
+    
 items= filtered_df[['편의성', '문화여가성', '교통성', '생활 치안','종합점수']].nlargest(5, '종합점수',keep='all')
-
+geo_score_df = new_df
+geo_score_df = geo_score_df["종합점수"]
 top_socre_toggle = st.toggle(label="TOP_5 보기")
 if top_socre_toggle:
     st.write(items)
 
 
-
-def generate_prompt(items):
-    item_text=""
-    weights_text = ", ".join([f"{key}:{value:.2f}" for key, value in initial_weights.items()])
-    for j in range(len(items)):
-      item_text += f"""
-      추천 결과 {j+1}
-      동네: {items.iloc[j].name}
-      편의성: {items.iloc[j][0]}
-      문화여가성: {items.iloc[j][1]}
-      교통성: {items.iloc[j][2]}
-      생활 치안: {items.iloc[j][3]}
-      종합 점수: {items.iloc[j][4]}
-      
-      """
-    #만약 추천할 동네가 상업밀집구역에 위치하면 다른 동네를 추천해주세요.  
-    item_text = item_text.strip()
-    prompt = f"""유저가 입력한 살기 좋은 동네의 각 지표의 선호도에 따른 추천 결과가 주어집니다.
-    유저의 입력과 각 추천 결과 동네, 편의성, 문화여가성,교통성,생활 치안,종합 점수 등을 참고하여 추천 동네를 작성하세요.
-    추천동네가 없다면 가장 비슷한 구역의 동네를 추천하세요.
-    그 동네에 대한 정보를 검색해서 구체적으로 작성하세요.
-    주변 대형마트와 백화점 정보에 대해서도 알려주세요.
-    20~30대 사회초년생을 위해서 작성하세요.
-    당신에 대한 소개를 먼저 하고, 친절한 말투로 작성해주세요.
-    중간 중간 이모지를 적절히 사용해주세요.
-    선호도가 가장 높은 지표의 정보를 검색해서 알려주세요(예시: 문화여가성->주변 카페 추천)
-    사용자가 입력한 가중치 정보: {weights_text}
-
-  ---
-  유저 입력: 
-  {item_text}
-  ---
-  """.strip()
-    return prompt
-from PIL import Image
-
-Image.MAX_IMAGE_PIXELS = None 
 with st.form("form"):
     submitted = st.form_submit_button("제출")
     if submitted:
-        col1, col2 = st.columns([1, 1])
-        with col1:
+        col5, col6 = st.columns([1, 1])
+        with col5:
             radar_fig = draw_radar_chart(items, index=0)
             st.pyplot(radar_fig)
-        with col2:
+        with col6:
             rent_fig = plot_rent_info(items.index[0], rent_price_df)
             st.pyplot(rent_fig)
 
@@ -301,6 +315,16 @@ with st.form("form"):
             draw_streaming_response(response)
 
         selected_town_name = items.index[0]
-        st.subheader("지도")
+        st.subheader("지도(종합점수 한눈에 보기)")
         m = create_map(center_df, selected_town_name)
+        folium.Choropleth(
+        geo_data=geojson_data,
+        data=new_df["종합점수"],
+        columns=[new_df.index,new_df["종합점수"]],
+        fill_color='YlOrRd',
+        fill_opacity=0.5,
+        line_opacity=0.3,
+        key_on='feature.properties.EMD_NM').add_to(m)
         st_folium(m, width=700, height=500)
+        
+
